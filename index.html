@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Matafuegos - Bomberos Voluntarios Berrotarán</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{font-family:"Segoe UI",Arial,sans-serif;margin:0;background:#f1efec;color:#1d1d1d;font-size:16px}
+header{background:#9e1b1b;color:#fff;padding:10px 18px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+header h1{font-size:19px;margin:0;flex:1}
+main{padding:16px;max-width:1050px;margin:auto;overflow-x:auto}
+button{font-size:16px;padding:9px 15px;border:0;border-radius:6px;background:#9e1b1b;color:#fff;cursor:pointer;margin:2px 0}
+button:hover{background:#7d1414}button.s{background:#5b5b5b}
+button:focus,input:focus,select:focus{outline:3px solid #e6a100}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:14px}
+.grid button{height:96px;font-size:19px;font-weight:600}
+input,select{font-size:16px;max-width:100%;padding:7px;margin:2px 0;box-sizing:border-box;border:1px solid #999;border-radius:5px}
+table{width:100%;border-collapse:collapse;background:#fff;margin:8px 0}
+td,th{border:1px solid #c9c9c9;padding:6px 8px;text-align:left}th{background:#e4e0da}
+.card{background:#fff;padding:14px;border-radius:8px;margin:10px 0;border:1px solid #d6d2cb}
+.warn{background:#fff0c2;padding:10px;border-radius:6px;margin:8px 0;border:1px solid #e6a100}
+.cab{display:flex;justify-content:space-between;gap:12px;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:8px}
+.hoja{border:1px solid #000;padding:10px;margin-bottom:14px;page-break-inside:avoid;font-size:13px;background:#fff}
+#imp{display:none}
+@media print{#app{display:none}#imp{display:block}body{background:#fff}}
+</style></head><body>
+<div id="app"><header><h1>🚒 Bomberos Voluntarios Berrotarán · Matafuegos</h1><span id="quien"></span><button class="s" onclick="go('home')">🏠 Inicio</button><button class="s" onclick="salir()">Salir</button></header><main id="main"></main></div>
+<div id="imp"></div>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+// ---- Datos de la Asociación (editar acá si cambian) ----
+const ASOC={nombre:'ASOCIACIÓN BOMBEROS VOLUNTARIOS BERROTARÁN',dir:'Tel.: 0358-4942541 · Mitre 635 · 5817 Berrotarán, Cba.',fiscal:'IVA EXENTO · CUIT 30-68397803-1<br>Ing. brutos 281097733 · Inicio de actividad 22/09/1993'};
+const K='matafuegos_bomberos_berrotaran',$=s=>document.querySelector(s);
+const ES=['Recibido','Pendiente de trabajo','En proceso','Listo para entregar','Entregado','Anulado'],PEND=ES.slice(0,3);
+const AG=['Polvo ABC','Polvo BC','CO₂','Agua','Espuma','Otro'],TR=['Recarga','Mantenimiento','Recarga y mantenimiento','Prueba hidráulica','Otro'],MP=['Efectivo','Transferencia','Tarjeta','Otro'];
+let db,tmp=[],fOrd='pend',PS=[],rol=null,dv=30;
+let cur,curA,CLD,WQ=Promise.resolve(),RT,ready=false;const COLS=['clientes','ordenes','pagos','precios','log'],SN={clientes:{},ordenes:{},pagos:{},precios:{},log:{},cfg:null};
+db={clientes:[],ordenes:[],pagos:[],precios:[],log:[],cfg:{orden:1,recibo:1,cliente:1,pago:1,ultimaCopia:null}};
+const S=v=>v&&typeof v=='object'?Array.isArray(v)?'['+v.map(S)+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+S(v[k])).join(',')+'}':JSON.stringify(v),C=x=>S(JSON.parse(JSON.stringify(x)));
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7),did=(c,x)=>String(c=='ordenes'?x.n:c=='clientes'||c=='pagos'?x.id:x.k);
+const nx=(k,a,f)=>{while(a.some(x=>x[f]==db.cfg[k]))db.cfg[k]++;return db.cfg[k]++};
+function norm(){['precios','log'].forEach(c=>db[c].forEach(x=>{if(!x.k)x.k=uid();if(c=='precios'&&!x.ts)x.ts=Date.now()}));db.ordenes.forEach(o=>{if(o.estado=='Recibido')o.estado='Pendiente de trabajo'})}
+async function push(){const ops=[];COLS.forEach(c=>{const cur={};db[c].forEach(x=>cur[did(c,x)]=C(x));
+ Object.keys(cur).forEach(k=>{if(SN[c][k]!==cur[k])ops.push(()=>CLD.doc(c+'/'+k).set(JSON.parse(cur[k])).then(()=>{SN[c][k]=cur[k]}))});
+ Object.keys(SN[c]).forEach(k=>{if(!(k in cur))ops.push(()=>CLD.doc(c+'/'+k).delete().then(()=>{delete SN[c][k]}))})});
+ const cf=C(db.cfg);if(SN.cfg!==cf)ops.push(()=>CLD.doc('cfg/main').set(JSON.parse(cf)).then(()=>{SN.cfg=cf}));
+ for(let i=0;i<ops.length;i+=20)await Promise.all(ops.slice(i,i+20).map(f=>f()))}
+function save(){norm();WQ=WQ.then(push).catch(e=>alert('No se pudo guardar en la nube ('+((e&&e.message)||e)+'). Revisá la conexión y no cierres la página.'))}
+function apply(c,s){let ch=0;s.docChanges().forEach(x=>{const id=x.doc.id;
+ if(x.type=='removed'){if(SN[c][id]!==undefined){delete SN[c][id];db[c]=db[c].filter(y=>did(c,y)!=id);ch=1}return}
+ const d=x.doc.data(),str=C(d);if(SN[c][id]===str)return;const i=db[c].findIndex(y=>did(c,y)==id);if(i>=0&&C(db[c][i])!==SN[c][id])return;
+ SN[c][id]=str;if(i<0)db[c].push(d);else db[c][i]=d;ch=1});
+ db.log.sort((a,b)=>a.f<b.f?-1:1);db.precios.sort((a,b)=>(a.ts||0)-(b.ts||0));if(ch&&ready){clearTimeout(RT);RT=setTimeout(refresh,700)}}
+function refresh(){if(!['home','ordenes','deudas','venc'].includes(cur))return;const a=document.activeElement;if(a&&/INPUT|SELECT/.test(a.tagName))return;const y=scrollY;go(cur,curA);scrollTo(0,y)}
+function dlg(msg,def,mode){return new Promise(r=>{const d=document.createElement('div');d.style.cssText='position:fixed;inset:0;background:#0007;display:flex;align-items:center;justify-content:center;z-index:99;padding:16px';
+ d.innerHTML='<div class="card" style="max-width:420px;width:100%"><p style="white-space:pre-wrap"></p>'+(mode=='p'?'<input id="dl_i" style="width:100%"><br>':'')+'<button id="dl_o">Aceptar</button> '+(mode?'<button class="s" id="dl_c">Cancelar</button>':'')+'</div>';
+ d.querySelector('p').textContent=msg;const i=d.querySelector('input');if(i)i.value=def==null?'':def;document.body.appendChild(d);
+ const f=v=>{d.remove();r(v)};d.querySelector('#dl_o').onclick=()=>f(mode=='p'?i.value:true);const c=d.querySelector('#dl_c');if(c)c.onclick=()=>f(mode=='p'?null:false);(i||d.querySelector('#dl_o')).focus()})}
+window.alert=m=>{dlg(String(m))};const confirmar=m=>dlg(m,0,'c'),pedir=(m,v)=>dlg(m,v,'p');
+const iso=d=>new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10),hoy=()=>iso(new Date());
+const $$=n=>'$ '+Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fd=d=>d?d.split('-').reverse().join('/'):'',rc=n=>String(n).padStart(4,'0');
+const log=t=>db.log.push({f:new Date().toISOString(),t});
+const opt=a=>a.map(x=>`<option>${x}</option>`).join('');
+const ord=n=>db.ordenes.find(o=>o.n==n),cli=id=>db.clientes.find(c=>c.id==id)||{};
+const total=o=>o.items.reduce((a,i)=>a+i.cant*(i.precio||0),0);
+const cobrado=o=>db.pagos.filter(p=>p.orden==o.n).reduce((a,p)=>a+p.importe,0);
+const saldo=o=>o.estado=='Anulado'?0:Math.round((total(o)-cobrado(o))*100)/100;
+const cant=o=>o.items.reduce((a,i)=>a+i.cant,0);
+const deudaCli=id=>db.ordenes.filter(o=>o.cliente==id).reduce((a,o)=>a+saldo(o),0);
+const detalle=o=>o.items.map(i=>`${i.cant} ${i.trabajo.toLowerCase()} ${i.agente} ${i.cap}`).join(', ');
+const V={};
+function go(v,a){if(!rol&&v!='login'&&v!='setup'){v=db.cfg.admin?'login':'setup';a=undefined}if(rol=='taller'&&!TALLER.includes(v)){v='home';a=undefined}cur=v;curA=a;window.scrollTo(0,0);$('#main').innerHTML=V[v](a)||'';if(V[v+'_i'])V[v+'_i'](a)}
+
+// ---- Inicio ----
+V.home=()=>{const pend=db.ordenes.filter(o=>PEND.includes(o.estado)).length,lis=db.ordenes.filter(o=>o.estado=='Listo para entregar').length,deu=db.ordenes.reduce((a,o)=>a+saldo(o),0);
+ if(rol=='taller')return `<p>Pendientes de trabajo: <b>${pend}</b> · Listos para entregar: <b>${lis}</b></p><div class="grid"><button onclick="go('nuevo')">➕ Nuevo ingreso</button><button onclick="go('clientes')">🔎 Clientes</button><button onclick="go('ordenes','pend')">🛠 Órdenes pendientes</button><button onclick="go('ordenes','Listo para entregar')">✅ Listos para entregar</button><button onclick="go('ordenes','Entregado')">📦 Entregados</button></div>`;
+ const nv=vencList().length,dias=db.cfg.ultimaCopia?(Date.now()-new Date(db.cfg.ultimaCopia))/864e5:999;
+ const B=[['➕ Nuevo ingreso',"go('nuevo')"],['🔎 Buscar cliente',"go('clientes')"],['🛠 Órdenes pendientes',"go('ordenes','pend')"],['✅ Listos para entregar',"go('ordenes','Listo para entregar')"],['📦 Registrar entrega',"go('ordenes','Listo para entregar')"],['💵 Registrar pago',"go('deudas')"],['📋 Deudas',"go('deudas')"],['📊 Caja e informes',"go('caja')"],['🏷 Lista de precios',"go('precios')"],['⏰ Vencimientos',"go('venc')"],['💾 Copias de seguridad',"go('copias')"]];
+ return (dias>7?`<div class="warn">⚠ ${db.cfg.ultimaCopia?'Pasaron más de 7 días desde la última copia de seguridad.':'Todavía no se hizo ninguna copia de seguridad.'} <button onclick="go('copias')">Hacer copia ahora</button></div>`:'')+
+ (nv?`<div class="warn">⏰ ${nv} matafuego(s) vencen en los próximos ${dv} días o ya vencieron. <button onclick="go('venc')">Ver y avisar</button></div>`:'')+(lis?`<div class="warn">Hay ${lis} orden(es) lista(s) para entregar.</div>`:'')+
+ `<p>Pendientes de trabajo: <b>${pend}</b> · Listos para entregar: <b>${lis}</b> · Total a cobrar: <b>${$$(deu)}</b></p><div class="grid">${B.map(([t,f])=>`<button onclick="${f}">${t}</button>`).join('')}</div>`};
+
+// ---- Clientes ----
+V.clientes=()=>`<h2>Clientes</h2><input id="q" placeholder="Buscar por nombre, teléfono, DNI o CUIT" oninput="listaCli()" style="width:65%"> <button onclick="go('cliForm')">+ Nuevo cliente</button><div id="lc"></div>`;
+V.clientes_i=()=>listaCli();
+function listaCli(){const q=($('#q').value||'').toLowerCase(),r=db.clientes.filter(c=>[c.nombre,c.tel,c.doc].join(' ').toLowerCase().includes(q));
+ $('#lc').innerHTML=r.length?'<table><tr><th>N°<th>Nombre<th>Teléfono<th>DNI/CUIT<th>'+(rol=='taller'?'':'Saldo')+'<th></tr>'+r.map(c=>`<tr><td>${c.id}<td>${esc(c.nombre)}<td>${esc(c.tel)}<td>${esc(c.doc)}<td>${rol=='taller'?'':$$(deudaCli(c.id))}<td><button onclick="go('ficha',${c.id})">Ver</button>`).join('')+'</table>':'<p>No hay clientes que coincidan. Usá "+ Nuevo cliente" para cargar uno.</p>'}
+V.cliForm=id=>{const c=id?cli(id):{};return `<h2>${id?'Editar':'Nuevo'} cliente</h2><div class="card">`+
+ ['nombre:Nombre y apellido o razón social','doc:DNI o CUIT','tel:Teléfono','dom:Domicilio','loc:Localidad','cp:Cód. postal','prov:Provincia','obs:Observaciones'].map(x=>{const[k,l]=x.split(':');return `${l}<br><input id="f_${k}" value="${esc(c[k]||'')}" style="width:100%"><br>`}).join('')+
+ `<br><button onclick="gCli(${id||0})">Guardar cliente</button> <button class="s" onclick="go('clientes')">Cancelar</button></div>`};
+function gCli(id){const g=k=>$('#f_'+k).value.trim(),nombre=g('nombre'),doc=g('doc');
+ if(!nombre)return alert('Falta el nombre o razón social.');
+ if(doc&&!/^[\d-]{7,13}$/.test(doc))return alert('El DNI o CUIT solo puede tener números (y guiones).');
+ if(doc&&db.clientes.some(x=>x.id!=id&&x.doc==doc))return alert('Ya existe un cliente con ese DNI/CUIT.');
+ let c=id?cli(id):{};if(!id){c.id=nx('cliente',db.clientes,'id');db.clientes.push(c)}
+ Object.assign(c,{nombre,doc,tel:g('tel'),dom:g('dom'),loc:g('loc'),cp:g('cp'),prov:g('prov'),obs:g('obs')});
+ log((id?'Modifica':'Crea')+' cliente '+c.id+' '+nombre);save();go('ficha',c.id)}
+V.ficha=id=>{const c=cli(id);return `<h2>${esc(c.nombre)} <small>(cliente N° ${c.id})</small></h2><div class="card">DNI/CUIT: ${esc(c.doc)} · Tel.: ${esc(c.tel)}<br>${esc(c.dom)} ${esc(c.loc)} ${esc(c.cp)} ${esc(c.prov)}<br>${esc(c.obs)}<br><br><button onclick="go('nuevo',${id})">Nuevo ingreso</button> <button class="s" onclick="go('cliForm',${id})">Editar datos</button> <button class="s" onclick="go('clientes')">Volver</button></div>${rol=='taller'?'':`<h3>Saldo pendiente: ${$$(deudaCli(id))}</h3>`}<h3>Historial de trabajos</h3>`+tablaOrd(db.ordenes.filter(o=>o.cliente==id).sort((a,b)=>b.n-a.n))};
+function tablaOrd(os){const T=rol=='taller';return os.length?'<table><tr><th>Orden<th>Fecha<th>Cliente<th>Estado<th>Unid.'+(T?'':'<th>Total<th>Cobrado<th>Saldo')+'<th></tr>'+os.map(o=>`<tr><td>${o.n}<td>${fd(o.fecha)}<td>${esc(cli(o.cliente).nombre)}<td>${o.estado}<td>${cant(o)}`+(T?'':`<td>${$$(total(o))}<td>${$$(cobrado(o))}<td>${$$(saldo(o))}`)+`<td><button onclick="go('orden',${o.n})">Abrir</button>`).join('')+'</table>':'<p>No hay órdenes para mostrar.</p>'}
+
+// ---- Nuevo ingreso ----
+V.nuevo=cid=>{tmp=[];return `<h2>Nuevo ingreso de matafuegos</h2><div class="card">Cliente<br><select id="n_c" style="width:70%">${db.clientes.map(c=>`<option value="${c.id}" ${c.id==cid?'selected':''}>${esc(c.nombre)} (N° ${c.id})</option>`).join('')}</select> <button class="s" onclick="go('cliForm')">+ Cliente nuevo</button><br>Fecha de recepción <input type="date" id="n_f" value="${hoy()}"><hr>
+Cant. <input id="i_c" type="number" min="1" value="1" style="width:65px"> <select id="i_a">${opt(AG)}</select> Capacidad <input id="i_k" style="width:80px" placeholder="2,5 kg"> <select id="i_t">${opt(TR)}</select> ID del matafuego <input id="i_s" style="width:110px"> <button onclick="addIt()">Agregar</button>
+<div id="its"></div>Observaciones<br><input id="n_o" style="width:100%"><br><br><button onclick="gOrd()">Guardar e imprimir orden de trabajo</button></div>`};
+function addIt(){const c=+$('#i_c').value,s=$('#i_s').value.trim(),k=$('#i_k').value.trim();
+ if(!(Number.isInteger(c)&&c>0))return alert('La cantidad debe ser un número entero mayor a cero.');
+ if(!k)return alert('Falta la capacidad (por ejemplo 2,5 kg).');
+ if(s&&c>1)return alert('Si cargás ID, agregá de a una unidad.');
+ if(s&&(tmp.some(x=>x.serie==s)||db.ordenes.some(o=>[...PEND,'Listo para entregar'].includes(o.estado)&&o.items.some(x=>x.serie==s))))return alert('Ese ID ya está cargado en una orden en curso.');
+ tmp.push({cant:c,agente:$('#i_a').value,cap:k,trabajo:$('#i_t').value,serie:s,precio:null});$('#i_s').value='';rIts()}
+function rIts(){$('#its').innerHTML='<table>'+tmp.map((i,x)=>`<tr><td>${i.cant}<td>${i.agente} ${esc(i.cap)}<td>${i.trabajo}<td>${esc(i.serie)}<td><button class="s" onclick="tmp.splice(${x},1);rIts()">Quitar</button>`).join('')+'</table>'}
+function gOrd(){const c=$('#n_c').value;if(!c)return alert('Primero elegí o creá un cliente.');if(!tmp.length)return alert('Agregá al menos un matafuego.');if(!$('#n_f').value)return alert('Falta la fecha.');
+ const o={n:nx('orden',db.ordenes,'n'),fecha:$('#n_f').value,cliente:+c,estado:'Pendiente de trabajo',items:tmp,obs:$('#n_o').value,fin:'',entrega:'',retira:'',motivo:''};
+ db.ordenes.push(o);log('Crea orden '+o.n);save();imprimirOrden(o.n);go('orden',o.n)}
+
+// ---- Órdenes ----
+V.ordenes=a=>{if(a)fOrd=a;return `<h2>Órdenes</h2><select id="fo" onchange="fOrd=this.value;lOrd()"><option value="pend">Pendientes (sin entregar)</option><option value="all">Todas</option>${opt(ES.slice(1))}</select> <input id="q" placeholder="N° de orden o cliente" oninput="lOrd()"><div id="lo"></div>`};
+V.ordenes_i=()=>{$('#fo').value=fOrd;lOrd()};
+function lOrd(){const q=($('#q').value||'').toLowerCase();
+ $('#lo').innerHTML=tablaOrd(db.ordenes.filter(o=>(fOrd=='all'||(fOrd=='pend'?!['Entregado','Anulado'].includes(o.estado):o.estado==fOrd))&&(o.n+' '+cli(o.cliente).nombre).toLowerCase().includes(q)).sort((a,b)=>b.n-a.n))}
+V.orden=n=>{if(rol=='taller')return ordenTaller(n);const o=ord(n),c=cli(o.cliente),ed=!['Entregado','Anulado'].includes(o.estado),pg=db.pagos.filter(p=>p.orden==n);
+ return `<h2>Orden N° ${o.n} · ${o.estado}</h2><div class="card"><b>${esc(c.nombre)}</b> · Recibida ${fd(o.fecha)} · Tel. ${esc(c.tel)}<br>${esc(o.obs)}${o.fin?'<br>Finalizada: '+fd(o.fin):''}${o.entrega?'<br>Entregada: '+fd(o.entrega)+(o.retira?' · Retira: '+esc(o.retira):''):''}${o.motivo?'<br>Motivo de anulación: '+esc(o.motivo):''}<br><br><button onclick="imprimirOrden(${n})">Imprimir orden (2 copias)</button> <button class="s" onclick="go('ficha',${c.id})">Ficha del cliente</button> <button class="s" onclick="go('ordenes')">Volver a órdenes</button></div>
+ ${PEND.includes(o.estado)?`<div class="card"><button onclick="listo(${n})">✅ Marcar como LISTO PARA ENTREGAR</button></div>`:''}
+ ${ed?`<div class="card">Cambiar estado: <select id="ne">${ES.slice(1,4).map(e=>`<option ${e==o.estado?'selected':''}>${e}</option>`).join('')}</select> <button onclick="cEst(${n})">Cambiar</button> <button class="s" onclick="anular(${n})">Anular orden</button></div>`:''}
+ <h3>Detalle y precios</h3><table><tr><th>Cant.<th>Matafuego<th>Trabajo<th>ID<th>Vence<th>Precio unitario<th>Subtotal</tr>${o.items.map(i=>`<tr><td>${i.cant}<td>${i.agente} ${esc(i.cap)}<td>${i.trabajo}<td>${esc(i.serie)}<td>${ed?`<input type="date" class="vc" value="${i.venc||''}">`:fd(i.venc)}<td>${ed?`<input type="number" step="0.01" min="0" class="pr" value="${i.precio??''}" style="width:120px">`:$$(i.precio)}<td>${$$(i.cant*(i.precio||0))}`).join('')}</table>
+ ${ed?`<button onclick="gPrecios(${n})">Guardar precios</button> <button class="s" onclick="listaP(${n})">Completar con la lista de precios</button>`:''}
+ <h3>Total ${$$(total(o))} · Cobrado ${$$(cobrado(o))} · Saldo ${$$(saldo(o))}</h3>
+ ${ed?`<div class="card"><b>Registrar entrega</b><br>Fecha <input type="date" id="e_f" value="${hoy()}"> Retira (si no es el cliente) <input id="e_r"> <button onclick="entregar(${n})">Registrar entrega</button></div>`:''}
+ <h3>Pagos</h3><table><tr><th>Recibo<th>Fecha<th>Tipo<th>Medio<th>Importe<th></tr>${pg.map(p=>`<tr><td>${p.recibo?rc(p.recibo):'—'}<td>${fd(p.fecha)}<td>${p.tipo}${p.ref?' (recibo '+rc(p.ref)+')':''}<td>${p.medio}<td>${$$(p.importe)}<td>${p.tipo=='Pago'?`<button onclick="imprimirRecibo(${p.id})">Imprimir recibo</button> <button class="s" onclick="corregir(${p.id})">Devolver/corregir</button>`:esc(p.obs)}`).join('')}</table>
+ ${o.estado!='Anulado'?`<div class="card"><b>Registrar pago</b><br>Importe <input type="number" step="0.01" min="0" id="p_i" value="${saldo(o)>0?saldo(o).toFixed(2):''}" style="width:130px"> Medio <select id="p_m">${opt(MP)}</select> Fecha <input type="date" id="p_f" value="${hoy()}"><br>Observaciones <input id="p_o" style="width:60%"> <button onclick="gPago(${n})">Registrar pago</button></div>`:''}`};
+function listo(n){const o=ord(n);log(`Orden ${n}: ${o.estado} → Listo para entregar`);o.estado='Listo para entregar';o.fin=hoy();ponerVenc(o);save();go('orden',n)}
+function cEst(n){const o=ord(n),e=$('#ne').value;if(e==o.estado)return;log(`Orden ${n}: ${o.estado} → ${e}`);o.estado=e;if(e=='Listo para entregar'){o.fin=hoy();ponerVenc(o)}save();go('orden',n)}
+async function anular(n){const o=ord(n);if(cobrado(o)!=0)return alert('La orden tiene pagos registrados. Primero registrá la devolución.');const m=await pedir('Motivo de la anulación:');if(!m)return;o.estado='Anulado';o.motivo=m;log('Anula orden '+n+': '+m);save();go('orden',n)}
+function gPrecios(n){const o=ord(n),r=[...document.querySelectorAll('.pr')];
+ if(r.some(x=>x.value!==''&&!(+x.value>=0)))return alert('Hay un precio inválido.');
+ r.forEach((x,k)=>o.items[k].precio=x.value===''?null:+x.value);[...document.querySelectorAll('.vc')].forEach((x,k)=>o.items[k].venc=x.value||null);log('Precios de orden '+n+': total '+total(o));save();go('orden',n)}
+function listaP(n){const o=ord(n);let f=0;o.items.forEach(i=>{if(i.precio==null){const p=precioDe(i);if(p!=null)i.precio=p;else f++}});save();go('orden',n);if(f)alert(f+' renglón(es) no tienen precio en la lista. Cargalos a mano o agregalos en la Lista de precios.')}
+async function entregar(n){const o=ord(n);if(!(total(o)>0))return alert('Cargá los precios antes de entregar.');
+ if(saldo(o)>0&&!(await confirmar('Queda un saldo de '+$$(saldo(o))+'. ¿Entregar igual?')))return;
+ o.estado='Entregado';o.entrega=$('#e_f').value||hoy();o.retira=$('#e_r').value.trim();if(!o.fin)o.fin=o.entrega;ponerVenc(o);log('Entrega orden '+n+' · saldo '+$$(saldo(o)));save();go('orden',n)}
+
+// ---- Usuarios ----
+const TALLER=['home','ordenes','orden','nuevo','cliForm','clientes','ficha'];
+const hs=s=>{let h=5381;for(const c of 'bvb'+s+'ber')h=(h*33)^c.charCodeAt(0);return String(h>>>0)};
+V.setup=()=>`<h2>Primer uso: crear las contraseñas</h2><div class="card">Contraseña del administrador<br><input type="password" id="s_a"><br>Repetirla<br><input type="password" id="s_a2"><br>Contraseña del taller (para los que cargan los matafuegos)<br><input type="password" id="s_t"><br><br><button onclick="gSetup()">Guardar y entrar</button><hr>¿Ya tenés una copia de seguridad? <input type="file" id="rf" accept=".json"> <button class="s" onclick="restaurar()">Restaurar copia</button></div>`;
+V.login=()=>`<h2>Ingresar</h2><div class="card">Usuario<br><select id="u"><option value="admin">Administrador</option><option value="taller">Taller</option></select><br>Contraseña<br><input type="password" id="pw" onkeydown="if(event.key=='Enter')ingresar()"><br><br><button onclick="ingresar()">Ingresar</button></div>`;
+function ingresar(){const u=$('#u').value;if(hs($('#pw').value)!=db.cfg[u])return alert('Contraseña incorrecta.');rol=u;$('#quien').textContent=u=='admin'?'Administrador':'Taller';go('home')}
+function salir(){firebase.auth().signOut().then(()=>location.reload())}
+function gSetup(){const a=$('#s_a').value,t=$('#s_t').value;if(a.length<4)return alert('La contraseña del administrador debe tener al menos 4 caracteres.');if(a!=$('#s_a2').value)return alert('Las contraseñas del administrador no coinciden.');if(t.length<4||t==a)return alert('La del taller debe tener al menos 4 caracteres y ser distinta a la del administrador.');
+ db.cfg.admin=hs(a);db.cfg.taller=hs(t);log('Se crean las contraseñas');save();rol='admin';$('#quien').textContent='Administrador';go('home')}
+function cambiarPw(u){const p=prompt('Nueva contraseña para '+(u=='admin'?'el administrador':'el taller')+' (mínimo 4 caracteres):');if(!p)return;if(p.length<4)return alert('Es muy corta.');if(hs(p)==db.cfg[u=='admin'?'taller':'admin'])return alert('Tiene que ser distinta a la del otro usuario.');db.cfg[u]=hs(p);log('Cambio de contraseña: '+u);save();alert('Contraseña cambiada.')}
+function ordenTaller(n){const o=ord(n),ed=!['Entregado','Anulado'].includes(o.estado);
+ return `<h2>Orden N° ${o.n} · ${o.estado}</h2><div class="card"><b>${esc(cli(o.cliente).nombre)}</b> · Recibida ${fd(o.fecha)}${o.entrega?'<br>Entregada: '+fd(o.entrega):''}<br>${esc(o.obs)}<br><br><button onclick="imprimirOrden(${n})">Imprimir orden (2 copias)</button> <button class="s" onclick="go('ordenes')">Volver</button></div>
+ ${PEND.includes(o.estado)?`<div class="card"><button onclick="listo(${n})">✅ Marcar como LISTO PARA ENTREGAR</button></div>`:''}
+ ${ed?`<div class="card">Estado: <select id="ne">${ES.slice(1,4).map(e=>`<option ${e==o.estado?'selected':''}>${e}</option>`).join('')}</select> <button onclick="cEst(${n})">Cambiar</button></div>`:''}
+ <table><tr><th>Cant.<th>Matafuego<th>Trabajo<th>ID<th>Vence</tr>${o.items.map(i=>`<tr><td>${i.cant}<td>${i.agente} ${esc(i.cap)}<td>${i.trabajo}<td>${esc(i.serie)}<td>${fd(i.venc)}`).join('')}</table>`}
+
+// ---- Vencimientos ----
+function ponerVenc(o){const d=new Date((o.fin||hoy())+'T12:00:00');d.setFullYear(d.getFullYear()+1);const v=iso(d);o.items.forEach(i=>{if(!i.venc)i.venc=v})}
+function wa(t){let d=String(t||'').replace(/\D/g,'').replace(/^0+/,'');if(d.startsWith('549'))d=d.slice(3);else if(d.startsWith('54'))d=d.slice(2);
+ if(d.length==12)for(const a of [4,3,2])if(d.slice(a,a+2)=='15'){d=d.slice(0,a)+d.slice(a+2);break}
+ return d.length==10?'https://wa.me/549'+d:''}
+function vencList(){const lim=iso(new Date(Date.now()+dv*864e5)),u={};
+ db.ordenes.forEach(o=>{if(!['Listo para entregar','Entregado'].includes(o.estado))return;o.items.forEach((i,k)=>{if(!i.venc)return;const e={o,i,k},key=i.serie?'id'+i.serie:o.n+'_'+k;if(!u[key]||u[key].i.venc<i.venc)u[key]=e})});
+ return Object.values(u).filter(e=>!e.i.cerrado&&e.i.venc<=lim).sort((a,b)=>a.i.venc<b.i.venc?-1:1)}
+V.venc=()=>`<h2>Vencimientos</h2><div class="card">Mostrar los que vencen en los próximos <input id="vd" type="number" min="1" value="${dv}" style="width:75px"> días <button onclick="dv=+$('#vd').value||30;go('venc')">Ver</button><br><small>El vencimiento es 1 año desde que el trabajo queda listo. Se puede corregir en cada orden. Si un matafuego tiene ID, se considera solo su último vencimiento.</small></div><div id="lv"></div>`;
+V.venc_i=()=>lVenc();
+function filaVenc({o,i,k}){const c=cli(o.cliente),w=wa(c.tel),h=hoy(),t=`Hola ${c.nombre}, te escribimos de Bomberos Voluntarios de Berrotarán: la carga de tu matafuego (${i.agente} ${i.cap}${i.serie?', ID '+i.serie:''}) vence el ${fd(i.venc)}. Podés acercarte para recargarlo. ¡Gracias!`;
+ return `<tr style="${i.venc<h?'background:#ffd9d9':''}"><td>${fd(i.venc)}${i.venc<h?' (vencido)':''}<td>${esc(c.nombre)}<td>${esc(c.tel)}<td>${i.cant} ${i.agente} ${esc(i.cap)}<td>${esc(i.serie)}<td>${i.avisado?fd(i.avisado):'—'}<td>${w?`<a href="${w}?text=${encodeURIComponent(t)}" target="_blank"><button>WhatsApp</button></a> `:''}<button class="s" onclick="avisado(${o.n},${k})">Ya avisé</button> <button class="s" onclick="cerrar(${o.n},${k})">Ya renovó / no avisar</button>`}
+function lVenc(){const r=vencList();$('#lv').innerHTML=r.length?'<table><tr><th>Vence<th>Cliente<th>Teléfono<th>Matafuego<th>ID<th>Avisado<th></tr>'+r.map(filaVenc).join('')+'</table>':'<p>No hay vencimientos en ese plazo.</p>'}
+function avisado(n,k){ord(n).items[k].avisado=hoy();log('Aviso de vencimiento, orden '+n);save();lVenc()}
+async function cerrar(n,k){if(!(await confirmar('¿Sacar este matafuego de la lista de avisos?')))return;ord(n).items[k].cerrado=true;log('Sin aviso de vencimiento, orden '+n);save();lVenc()}
+
+// ---- Pagos ----
+function nuevoPago(p){p.id=nx('pago',db.pagos,'id');if(p.tipo=='Pago')p.recibo=nx('recibo',db.pagos,'recibo');db.pagos.push(p);log(`${p.tipo} ${$$(p.importe)} orden ${p.orden}`);save()}
+async function gPago(n){const o=ord(n),imp=Math.round(+$('#p_i').value*100)/100,f=$('#p_f').value;
+ if(!(imp>0))return alert('Ingresá un importe mayor a cero.');if(!f)return alert('Falta la fecha.');
+ if(!(total(o)>0))return alert('Primero cargá los precios de la orden.');
+ if(imp>saldo(o)&&!(await confirmar('El importe supera el saldo ('+$$(saldo(o))+'). ¿Registrar igual?')))return;
+ const d=db.pagos.find(p=>p.orden==n&&p.importe==imp&&p.fecha==f&&p.tipo=='Pago');
+ if(d&&!(await confirmar('Ya hay un pago de '+$$(imp)+' en esa fecha (recibo '+rc(d.recibo)+'). ¿Es otro pago distinto?')))return;
+ nuevoPago({orden:n,fecha:f,importe:imp,medio:$('#p_m').value,tipo:'Pago',obs:$('#p_o').value,ref:null});if(!['Entregado','Anulado'].includes(o.estado)&&saldo(o)<=0&&await confirmar('La orden quedó paga. ¿Se entregan los matafuegos ahora?')){o.estado='Entregado';o.entrega=hoy();o.fin=o.fin||o.entrega;ponerVenc(o);log('Entrega orden '+n);save()}go('orden',n)}
+async function corregir(id){const p=db.pagos.find(x=>x.id==id),ya=db.pagos.filter(x=>x.ref==p.recibo&&x.tipo!='Pago').reduce((a,x)=>a-x.importe,0),max=Math.round((p.importe-ya)*100)/100;
+ if(max<=0)return alert('Este pago ya fue devuelto o corregido por completo.');
+ const r=await pedir('Importe a devolver o corregir (máximo '+max+'):',max);if(r===null)return;const v=parseFloat(String(r).replace(',','.'));if(!(v>0&&v<=max))return alert('Importe inválido.');
+ const m=await pedir('Motivo:');if(!m)return;
+ nuevoPago({orden:p.orden,fecha:hoy(),importe:-v,medio:p.medio,tipo:'Devolución/corrección',obs:m,ref:p.recibo});go('orden',p.orden)}
+V.deudas=()=>{const os=db.ordenes.filter(o=>saldo(o)>0).sort((a,b)=>deudaCli(b.cliente)-deudaCli(a.cliente)||a.n-b.n);return `<h2>Deudas</h2><h3>Total a cobrar: ${$$(os.reduce((a,o)=>a+saldo(o),0))}</h3><p>Abrí la orden para registrar un pago.</p>`+tablaOrd(os)};
+
+// ---- Caja e informes ----
+V.caja=()=>`<h2>Caja e informes</h2><div class="card">Desde <input type="date" id="c_d" value="${hoy().slice(0,8)}01"> Hasta <input type="date" id="c_h" value="${hoy()}"> Cliente <select id="c_c"><option value="">Todos</option>${db.clientes.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select><br><button class="s" onclick="rango(0)">Hoy</button> <button class="s" onclick="rango(6)">Últimos 7 días</button> <button class="s" onclick="rango(29)">Últimos 30 días</button> <button onclick="rCaja()">Ver informe</button> <button class="s" onclick="pr($('#rep').innerHTML)">Imprimir</button> <button class="s" onclick="csv()">Exportar a Excel (CSV)</button></div><div id="rep"></div>`;
+V.caja_i=()=>rCaja();
+function rango(d){const x=new Date();x.setDate(x.getDate()-d);$('#c_d').value=iso(x);$('#c_h').value=hoy();rCaja()}
+function rCaja(){const d=$('#c_d').value,h=$('#c_h').value,c=$('#c_c').value,en=f=>f&&f>=d&&f<=h;
+ const os=db.ordenes.filter(o=>!c||o.cliente==c),oc=os.filter(o=>o.estado!='Anulado'),rec=os.filter(o=>en(o.fecha)),ent=oc.filter(o=>en(o.entrega));
+ PS=db.pagos.filter(p=>en(p.fecha)&&(!c||ord(p.orden).cliente==c));const med={};PS.forEach(p=>med[p.medio]=(med[p.medio]||0)+p.importe);
+ $('#rep').innerHTML=`<div class="card"><h3>${ASOC.nombre}<br>Informe del ${fd(d)} al ${fd(h)}${c?' · '+esc(cli(c).nombre):''}</h3><table>
+ <tr><td>Órdenes recibidas<td>${rec.length}<tr><td>Matafuegos recibidos<td>${rec.reduce((a,o)=>a+cant(o),0)}<tr><td>Matafuegos entregados<td>${ent.reduce((a,o)=>a+cant(o),0)}
+ <tr><td>Órdenes pendientes (hoy)<td>${oc.filter(o=>PEND.includes(o.estado)).length}<tr><td>Listas para entregar (hoy)<td>${oc.filter(o=>o.estado=='Listo para entregar').length}
+ <tr><td><b>Facturado</b> (órdenes entregadas en el período)<td>${$$(ent.reduce((a,o)=>a+total(o),0))}
+ <tr><td><b>Cobrado</b> (pagos recibidos en el período)<td>${$$(PS.reduce((a,p)=>a+p.importe,0))}
+ <tr><td><b>Pendiente de cobro</b> (saldo actual)<td>${$$(oc.reduce((a,o)=>a+saldo(o),0))}</table>
+ <h4>Ingresos por medio de pago</h4><table>${Object.entries(med).map(([k,v])=>`<tr><td>${k}<td>${$$(v)}`).join('')||'<tr><td>Sin movimientos'}</table>
+ <h4>Movimientos de caja</h4><table><tr><th>Fecha<th>Recibo<th>Orden<th>Cliente<th>Tipo<th>Medio<th>Importe</tr>${PS.map(p=>`<tr><td>${fd(p.fecha)}<td>${p.recibo?rc(p.recibo):'—'}<td>${p.orden}<td>${esc(cli(ord(p.orden).cliente).nombre)}<td>${p.tipo}<td>${p.medio}<td>${$$(p.importe)}`).join('')}</table></div>`}
+function csv(){const r=[['Fecha','Recibo','Orden','Cliente','Tipo','Medio','Importe']].concat(PS.map(p=>[p.fecha,p.recibo?rc(p.recibo):'',p.orden,cli(ord(p.orden).cliente).nombre,p.tipo,p.medio,p.importe.toFixed(2).replace('.',',')]));
+ bajar('caja.csv','\ufeff'+r.map(x=>x.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n'),'text/csv')}
+
+// ---- Precios ----
+const pk=i=>[i.agente,i.cap.toLowerCase().replace(/\s/g,''),i.trabajo].join('|');
+function precioDe(i){const r=db.precios.filter(p=>pk(p)==pk(i));return r.length?r[r.length-1].precio:null}
+V.precios=()=>{const u={};db.precios.forEach(p=>u[pk(p)]=p);return `<h2>Lista de precios</h2><div class="card"><select id="l_a">${opt(AG)}</select> Capacidad <input id="l_k" style="width:85px" placeholder="2,5 kg"> <select id="l_t">${opt(TR)}</select> Precio <input id="l_p" type="number" min="0" step="0.01" style="width:120px"> <button onclick="gPL()">Guardar precio</button><br><small>Para cambiar un precio, cargalo otra vez con el mismo matafuego, capacidad y trabajo. Las órdenes ya cargadas no cambian.</small></div><table><tr><th>Matafuego<th>Trabajo<th>Precio<th>Vigente desde</tr>${Object.values(u).map(p=>`<tr><td>${p.agente} ${esc(p.cap)}<td>${p.trabajo}<td>${$$(p.precio)}<td>${fd(p.desde)}`).join('')}</table>`};
+function gPL(){const k=$('#l_k').value.trim(),p=+$('#l_p').value;if(!k)return alert('Falta la capacidad.');if(!(p>0))return alert('Ingresá un precio mayor a cero.');
+ db.precios.push({agente:$('#l_a').value,cap:k,trabajo:$('#l_t').value,precio:p,desde:hoy()});log(`Precio ${$('#l_a').value} ${k} ${$('#l_t').value}: ${$$(p)}`);save();go('precios')}
+
+// ---- Copias de seguridad ----
+function bajar(nom,txt){try{const b=new Blob([txt],{type:'text/plain;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=nom;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}catch(e){alert('No se pudo descargar el archivo.')}}
+V.copias=()=>`<h2>Copias de seguridad</h2><div class="card">Última copia: <b>${db.cfg.ultimaCopia?new Date(db.cfg.ultimaCopia).toLocaleString('es-AR'):'nunca'}</b><br><br><button onclick="copia()">💾 Hacer copia ahora</button><p>Se descarga un archivo. Guardalo en un pendrive o disco externo. Contiene todos los datos: que lo guarde solo el administrador.</p><hr>Restaurar desde una copia:<br><input type="file" id="rf" accept=".json"> <button class="s" onclick="restaurar()">Restaurar</button></div><h3>Historial de cambios (últimos 50)</h3><table>${db.log.slice(-50).reverse().map(l=>`<tr><td>${new Date(l.f).toLocaleString('es-AR')}<td>${esc(l.t)}`).join('')}</table>`;
+function copia(){db.cfg.ultimaCopia=new Date().toISOString();save();bajar('copia_matafuegos_'+hoy()+'.json',JSON.stringify(db),'application/json');go('copias')}
+function restaurar(){const f=$('#rf').files[0];if(!f)return alert('Elegí un archivo de copia.');const r=new FileReader();
+ r.onload=async()=>{try{const d=JSON.parse(r.result);if(!d.clientes||!d.ordenes||!d.pagos||!d.cfg)throw 0;
+  if(!(await confirmar('Esto reemplaza TODOS los datos actuales por los de la copia. ¿Continuar?')))return;db=d;delete db.cfg.admin;delete db.cfg.taller;db.precios=db.precios||[];db.log=db.log||[];log('Restauración de copia');save();go('home')}catch(e){alert('El archivo no es una copia válida.')}};r.readAsText(f)}
+
+// ---- Impresión ----
+function pr(h){const css=document.querySelector('style').textContent,w=window.open('','_blank');if(!w)return alert('Permití las ventanas emergentes para poder imprimir.');w.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Imprimir</title><style>'+css+'#imp{display:block}#app{display:none}</style></head><body><div id="imp">'+h+'</div><script>onload=function(){setTimeout(function(){print()},400)}<\/script></body></html>');w.document.close()}
+const CAB=(t,s)=>`<div class="cab"><div><b>${ASOC.nombre}</b><br>${ASOC.dir}<br>${ASOC.fiscal}</div><div style="text-align:right"><h2 style="margin:0">${t}</h2>${s}</div></div>`;
+const datosCli=c=>`<p>Sr./es: <b>${esc(c.nombre)}</b> · Tel.: ${esc(c.tel)}<br>Domicilio: ${esc(c.dom)} · Localidad: ${esc(c.loc)} · Cód. postal: ${esc(c.cp)} · Provincia: ${esc(c.prov)}</p>`;
+function imprimirOrden(n){const o=ord(n),c=cli(o.cliente);
+ const b=cp=>`<div class="hoja">${CAB('ORDEN DE TRABAJO N° '+o.n,'Fecha: '+fd(o.fecha)+'<br><b>'+cp+'</b>')}${datosCli(c)}<table><tr><th>Cant.<th>Descripción<th>Trabajo<th>ID del matafuego</tr>${o.items.map(i=>`<tr><td>${i.cant}<td>${i.agente} ${esc(i.cap)}<td>${i.trabajo}<td>${esc(i.serie)}`).join('')}</table><p>Observaciones: ${esc(o.obs)}</p><p>Recibí conforme: ______________________ Firma y sello</p></div>`;
+ pr(b('ORIGINAL · CLIENTE')+b('DUPLICADO · TALLER'))}
+function imprimirRecibo(id){const p=db.pagos.find(x=>x.id==id),o=ord(p.orden),c=cli(o.cliente),sd=Math.round((total(o)-db.pagos.filter(x=>x.orden==o.n&&x.id<=p.id).reduce((a,x)=>a+x.importe,0))*100)/100;
+ const b=cp=>`<div class="hoja">${CAB('RECIBO N° '+rc(p.recibo),'Fecha: '+fd(p.fecha)+'<br><b>'+cp+'</b>')}${datosCli(c)}<p>Recibí(mos) la suma de pesos: <b>${letras(p.importe)}</b> (${$$(p.importe)})</p><p>En concepto de: ${esc(detalle(o))} — Orden de trabajo N° ${o.n}</p><p>Medio de pago: ${p.medio}<br>Total del trabajo: ${$$(total(o))} · Saldo pendiente: <b>${$$(sd)}</b></p><p style="text-align:right">Firma y sello ______________________</p></div>`;
+ pr(b('ORIGINAL')+b('DUPLICADO'))}
+const U=['','uno','dos','tres','cuatro','cinco','seis','siete','ocho','nueve','diez','once','doce','trece','catorce','quince','dieciséis','diecisiete','dieciocho','diecinueve','veinte','veintiuno','veintidós','veintitrés','veinticuatro','veinticinco','veintiséis','veintisiete','veintiocho','veintinueve'],DD=['','','','treinta','cuarenta','cincuenta','sesenta','setenta','ochenta','noventa'],CC=['','ciento','doscientos','trescientos','cuatrocientos','quinientos','seiscientos','setecientos','ochocientos','novecientos'];
+const m3=n=>n==100?'cien':n<30?U[n]:n<100?DD[n/10|0]+(n%10?' y '+U[n%10]:''):CC[n/100|0]+(n%100?' '+m3(n%100):'');
+const apo=s=>s.replace(/veintiuno$/,'veintiún').replace(/uno$/,'un');
+const m6=n=>n<1000?m3(n):(n<2000?'mil':apo(m3(n/1000|0))+' mil')+(n%1000?' '+m3(n%1000):'');
+function letras(x){x=Math.round(x*100)/100;const e=Math.floor(x+1e-9),c=Math.round((x-e)*100);let t=e==0?'cero':e<1e6?m6(e):(e<2e6?'un millón':apo(m6(e/1e6|0))+' millones')+(e%1e6?' '+m6(e%1e6):'');
+ t=apo(t);t=t.charAt(0).toUpperCase()+t.slice(1);return t+(e==1?' peso':e>=1e6&&e%1e6==0?' de pesos':' pesos')+(c?' con '+String(c).padStart(2,'0')+'/100':'')}
+
+$('#main').innerHTML='<p>Cargando datos…</p>';
+function loginFb(){$('#quien').textContent='';$('#main').innerHTML='<h2>Ingresar</h2><div class="card">Correo<br><input type="email" id="fe" autocomplete="username"><br>Contraseña<br><input type="password" id="fp" autocomplete="current-password"><br><br><button onclick="entrarFb()">Ingresar</button> <button class="s" onclick="olvidoFb()">Olvidé mi contraseña</button></div>'}
+const EF={'auth/invalid-credential':'Correo o contraseña incorrectos.','auth/wrong-password':'Correo o contraseña incorrectos.','auth/user-not-found':'Correo o contraseña incorrectos.','auth/invalid-email':'El correo no es válido.','auth/too-many-requests':'Demasiados intentos. Esperá unos minutos.','auth/network-request-failed':'No hay conexión a internet.'};
+function entrarFb(){firebase.auth().signInWithEmailAndPassword($('#fe').value.trim(),$('#fp').value).catch(e=>alert(EF[e.code]||'No se pudo ingresar.'))}
+function olvidoFb(){const m=$('#fe').value.trim();if(!m)return alert('Escribí tu correo arriba y volvé a tocar este botón.');firebase.auth().sendPasswordResetEmail(m).then(()=>alert('Te enviamos un correo para cambiar la contraseña.')).catch(()=>alert('No se pudo enviar el correo. Revisá que esté bien escrito.'))}
+(function(){
+ if(typeof firebase==='undefined'||!window.FIREBASE_CONFIG||/PEGAR/.test(FIREBASE_CONFIG.apiKey||'PEGAR')){$('#main').innerHTML='<div class="warn">Falta configurar Firebase: abrí el archivo firebase-config.js y pegá los datos de tu proyecto.</div>';return}
+ firebase.initializeApp(FIREBASE_CONFIG);CLD=firebase.firestore();
+ firebase.auth().onAuthStateChanged(async u=>{
+  if(!u){loginFb();return}
+  let d;try{d=await CLD.doc('usuarios/'+u.uid).get()}catch(e){}
+  const r=d&&d.exists&&d.data().rol;
+  if(r!='admin'&&r!='taller'){$('#main').innerHTML='<div class="warn">Tu usuario ('+esc(u.email)+') todavía no tiene un rol asignado. Pedile al administrador que lo habilite.</div>';return}
+  rol=r;$('#quien').textContent=r=='admin'?'Administrador':'Taller';
+  let need=COLS.length+1;const un=()=>{let f=1;return()=>{if(f){f=0;if(--need==0){ready=true;go('home')}}}};
+  COLS.forEach(c=>{const f=un();CLD.collection(c).onSnapshot(s=>{apply(c,s);f()},()=>f())});
+  const f=un();CLD.doc('cfg/main').onSnapshot(s=>{if(s.exists){const d=s.data();SN.cfg=C(d);['orden','recibo','cliente','pago'].forEach(k=>d[k]=Math.max(d[k]||1,db.cfg[k]||1));Object.assign(db.cfg,d)}f()},()=>f())
+ })
+})();
+</script></body></html>
